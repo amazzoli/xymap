@@ -1,0 +1,3 @@
+# xymap
+Algorithm for a centrality measure in bipartite networks. 
+This repository provides an implementation of the algorithm discussed in the paper....
