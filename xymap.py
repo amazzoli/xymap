@@ -3,13 +3,12 @@
 """
 Created on Mon Jan 13 11:04:07 2020
 
-@author: andrea mazzolini
+@author: andrea
 """
 
 import numpy as _np
 import matplotlib.pyplot as _plt
 import matplotlib as _mpl
-#import sys as _sys
 
 
 class XYMap:
@@ -38,7 +37,7 @@ class XYMap:
         
             t_max (int): max number of the map iterations.
         
-            eps (float): threshold under which x and y are 
+            low_bound (float): threshold under which x and y are 
             considered zero.       
             
             print_info (bool): if the algorithm is verbose
@@ -54,6 +53,14 @@ class XYMap:
         # Dimensions of the network
         self.d = len(self._neighb[0]), len(self._neighb[1])
         
+        # Empty init. Variables filled after run()
+        (self.x_traj, self.y_traj) = (None, None)
+        (self.x_ranking, self.y_ranking) = (None, None)
+        (self.x_scores, self.y_scores) = (None, None)
+        (self.inverse_x_traj, self.inverse_y_traj) = (None, None)
+        (self.inverse_x_ranking, self.inverse_y_ranking) = (None, None)
+        (self.inverse_x_scores, self.inverse_y_scores) = (None, None)
+        
         
     def run(self, axis, gamma):
         """
@@ -62,13 +69,13 @@ class XYMap:
         opposite score is not.
         """
     
-        # Trajectories of the main score to compute ant the opporite one
+        # Trajectories of the main score to compute and the opposite one
         traj_s, traj_o = [_np.ones(self.d[axis])], [_np.ones(self.d[1-axis])]
         # Ranked indices of the scores
         rank_s, rank_o = _np.array([], dtype=int), _np.array([], dtype=int)
         # List of node indices that have reached the zero threshold
         zeros_s, zeros_o = _np.array([], dtype=int), _np.array([], dtype=int)
-
+            
         # Main loop
         for t in range(int(self.params['t_max'])):
             
@@ -95,15 +102,18 @@ class XYMap:
         # Update the class variables
         self._update_vars(axis, traj_s, traj_o, rank_s, rank_o, t)
         
+        if self.params['print_info']:
+            print ("Convergence in " + str(t) + " time steps.")
+            if t >= self.params['t_max']:
+                print("Warning. Stationary state not reached.")
+                
     
     def plot_traj(self, axis, l_width=1.2):
         
-        if axis==0:
-            traj = self.x_traj
-            y_label = '$x$ score'
-        else:
-            traj = self.y_traj
-            y_label = '$y$ score'
+        traj, rank = self._check_run(axis)
+        
+        if axis==0: y_label = '$x$ score'
+        else: y_label = '$y$ score'
             
         obs_to_color = _np.array([len(ind) for ind in self._neighb[axis]])
         cmap = _plt.cm.jet
@@ -124,7 +134,47 @@ class XYMap:
         
         return fig, ax
     
-                
+    
+    def positive_scores(self, axis, th_stat=10**(-2)):
+        """
+        Gets the fraction of positive stationary scores.
+        
+        Parameters:
+        axis: (int) 0 for x trajectories, 1 for y
+        th_stat: (float) threshold on the amplitude for defining a stationary 
+            trajectory.
+            
+        Return:
+            int: number of trajectories convergent to positive values.
+        """
+        
+        traj, rank = self._check_run(axis)
+            
+        low_boundary = _np.exp(_np.log(self.params['low_bound'])/2)
+        t = len(traj)-1
+        stat = 0
+        
+        # Iteration over the trajectories
+        for i in range(len(traj[0])):
+            # above the low boundary
+            if traj[t][i] > low_boundary:
+                # stationary (change less than stat_th)
+                if abs(_np.log(traj[t][i]) - _np.log(traj[t-1][i])) < th_stat:
+                    stat += 1
+        return stat
+    
+    
+    def ext_area(self, axis):
+        """
+        Compute the extinction area given the last ranking obtained through 
+        the run method
+        """
+        traj, rank = self._check_run(axis)
+        return _ext_area(axis, rank, self._neighb[1], self._neighb[0])
+        
+    
+    #  AUXILIARY METHODS
+    
     def _one_step(self, gamma, axis, opp_scores):
         """
         Compute one step of the map for a score (of the given axis and with 
@@ -167,19 +217,15 @@ class XYMap:
             self.x_scores = traj_s[-1]
             self.inverse_y_traj = traj_o
             self.inverse_y_ranking = rank_o
-        else:
+            self.inverse_y_scores = traj_o[-1]
+        if axis == 1:
             self.y_traj = traj_s
             self.y_ranking = rank_s
             self.y_scores = traj_s[-1]
-            self.inverse_x_traj = traj_o 
+            self.inverse_x_traj = traj_o
             self.inverse_x_ranking = rank_o
-            
-        if self.params['print_info']:
-            t = len(traj_s)-1
-            print ("Convergence in " + str(t) + " time steps.")
-            if t >= self.params['t_max']:
-                print("Warning. Stationary state not reached.")
-            
+            self.inverse_x_scores = traj_o[-1]
+                   
     def _set_params(self, **params_kw):
         
         self.params = {
@@ -220,8 +266,62 @@ class XYMap:
             
         return col_ind_at_row, row_ind_at_col  
     
+    def _check_run(self, axis):
+        """
+        Check if the algorithm has been run. It also return the trajectories 
+        and the ranking of the associated axis
+        """
+        if (self.x_traj, self.y_traj)[axis] is None:
+            if (self.inverse_x_traj, self.inverse_y_traj)[axis] is None:
+                raise Exception('The algorithm has not been run.')
+            else:
+                if self.params['print_info']:
+                    print('Warning: you are using the opposite score. It can contain errors if any score is a zero below threshold.')
+                    return (self.inverse_x_traj, self.inverse_y_traj)[axis], (self.inverse_x_ranking, self.inverse_y_ranking)[axis]
+        return (self.x_traj, self.y_traj)[axis], (self.x_ranking, self.y_ranking)[axis]
     
 
+
+def _ext_area(axis, ranking, row_ind_at_col, col_ind_at_row):
+    """
+    Compute the extinction area of a binary matrix formatted as a 
+    "indexes_lists" (see "_get_index_lists"), given a ranking of the nodes and
+    the axis (0 for row removing, 1 for column removing).
+    """
+    if axis == 0:
+        indexes_lists = _np.array([col_ind_at_row[:], row_ind_at_col[:]])
+    else:
+        indexes_lists = _np.array([row_ind_at_col[:], col_ind_at_row[:]])
+    if len(ranking) != len(indexes_lists[0]):
+        print ('Dimensions do not match')
+        return
+    
+    # Counting the already extincted columns. They are the ones whose list of
+    # associated row indexes is empty. In that case the extinction counter is
+    # increased and a -1 is added to the indexes list.
+    ext_nodes = 0
+    for c in range(len(indexes_lists[1])):
+        if len(indexes_lists[1][c]) == 0:
+            ext_nodes += 1
+            indexes_lists[1][c] = _np.append(indexes_lists[1][c], -1)
+            
+    ext_curve = [ext_nodes]
+    # Iteration over the ranked nodes to remove, r
+    for r in ranking[:-1]:
+        # Iter over the connected nodes in the other layer, r
+        for c in indexes_lists[0][r]:
+            # Removing the ranked node from the neighbours of c
+            indexes_lists[1][c] = indexes_lists[1][c][indexes_lists[1][c] != r]
+            
+            # If the neighbours of c is empty, then c gets extincted
+            if len(indexes_lists[1][c]) == 0:
+                ext_nodes += 1
+                indexes_lists[1][c] = _np.append(indexes_lists[1][c], -1)
+        
+        ext_curve.append(ext_nodes)
+    
+    # Returning the area below the extinction curve
+    return sum(ext_curve) / float(len(indexes_lists[0]) * len(indexes_lists[1]))
 
     
 
